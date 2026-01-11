@@ -6,15 +6,22 @@
         <span class="current-player" :class="{ black: currentPlayer === 1, white: currentPlayer === 2 }">
           {{ currentPlayer === 1 ? '黑棋' : '白棋' }}
         </span>
-        <span v-if="gameOver" class="winner">
+        <span v-if="gameOver && winner !== 0" class="winner">
           {{ winner === 1 ? '黑棋' : '白棋' }} 获胜!
         </span>
+        <span v-if="gameOver && winner === 0" class="draw">
+          平局!
+        </span>
       </div>
-      <button @click="resetGame" class="btn-reset">重新开始</button>
+      <div class="step-count">步数: {{ stepCount }}</div>
+      <div class="buttons">
+        <button @click="undoMove" class="btn-undo" :disabled="canUndo" :class="{ disabled: canUndo }">悔棋</button>
+        <button @click="resetGame" class="btn-reset">重新开始</button>
+      </div>
     </div>
 
     <div class="board-wrapper">
-      <div class="board" ref="boardRef">
+      <div class="board">
         <div
           v-for="(row, y) in board"
           :key="y"
@@ -41,8 +48,9 @@
     </div>
 
     <div v-if="gameOver" class="game-over-overlay" @click="resetGame">
-      <div class="game-over-content">
-        <h2>{{ winner === 1 ? '黑棋' : '白棋' }} 获胜!</h2>
+      <div class="game-over-content" @click.stop>
+        <h2 v-if="winner !== 0">{{ winner === 1 ? '黑棋' : '白棋' }} 获胜!</h2>
+        <h2 v-else>平局!</h2>
         <p>点击任意处重新开始</p>
       </div>
     </div>
@@ -50,17 +58,24 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
+import { ref, reactive, computed } from 'vue'
 
-// 游戏配置
+// 棋盘大小配置
 const BOARD_SIZE = 15
 
 // 游戏状态
-const board = ref([])
-const currentPlayer = ref(1)
-const gameOver = ref(false)
-const winner = ref(0)
-const lastMove = reactive({ x: -1, y: -1 })
+const board = ref([])           // 棋盘数据
+const currentPlayer = ref(1)    // 当前玩家: 1=黑棋, 2=白棋
+const gameOver = ref(false)     // 游戏是否结束
+const winner = ref(0)           // 获胜者: 0=无(平局), 1=黑棋, 2=白棋
+const lastMove = reactive({ x: -1, y: -1 })  // 最后一步的位置
+const stepCount = ref(0)        // 当前步数
+const history = ref([])         // 历史记录，用于悔棋
+
+// 计算是否可以悔棋
+const canUndo = computed(() => {
+  return history.value.length === 0 || gameOver.value
+})
 
 // 初始化棋盘
 const initBoard = () => {
@@ -75,66 +90,117 @@ const resetGame = () => {
   winner.value = 0
   lastMove.x = -1
   lastMove.y = -1
+  stepCount.value = 0
+  history.value = []
 }
 
-// 落子
-const placePiece = (x, y) => {
-  if (gameOver.value || board.value[y][x] !== 0) return
-
-  board.value[y][x] = currentPlayer.value
-  lastMove.x = x
-  lastMove.y = y
-
-  if (checkWin(x, y)) {
-    gameOver.value = true
-    winner.value = currentPlayer.value
-  } else {
-    currentPlayer.value = currentPlayer.value === 1 ? 2 : 1
+// 检查是否平局（棋盘已满）
+const checkDraw = () => {
+  // 检查棋盘上是否还有空位
+  for (let y = 0; y < BOARD_SIZE; y++) {
+    for (let x = 0; x < BOARD_SIZE; x++) {
+      if (board.value[y][x] === 0) {
+        return false
+      }
+    }
   }
+  return true
 }
 
-// 检查胜利
+// 检查胜利条件
 const checkWin = (x, y) => {
   const player = board.value[y][x]
+  // 四个检测方向: 水平、垂直、对角线、反对角线
   const directions = [
-    [1, 0],   // 水平
-    [0, 1],   // 垂直
-    [1, 1],   // 对角线
-    [1, -1]   // 反对角线
+    [1, 0],   // 水平方向
+    [0, 1],   // 垂直方向
+    [1, 1],   // 对角线方向
+    [1, -1]   // 反对角线方向
   ]
 
+  // 遍历四个方向
   for (const [dx, dy] of directions) {
     let count = 1
 
-    // 正方向
+    // 向正方向检测
     let i = 1
     while (true) {
       const nx = x + dx * i
       const ny = y + dy * i
+      // 超出边界或不是同色棋子，停止检测
       if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) break
       if (board.value[ny][nx] !== player) break
       count++
       i++
     }
 
-    // 反方向
+    // 向反方向检测
     i = 1
     while (true) {
       const nx = x - dx * i
       const ny = y - dy * i
+      // 超出边界或不是同色棋子，停止检测
       if (nx < 0 || nx >= BOARD_SIZE || ny < 0 || ny >= BOARD_SIZE) break
       if (board.value[ny][nx] !== player) break
       count++
       i++
     }
 
+    // 连成五子或以上，判定获胜
     if (count >= 5) return true
   }
 
   return false
 }
 
-// 初始化
+// 落子
+const placePiece = (x, y) => {
+  // 游戏已结束或该位置已有棋子，不能落子
+  if (gameOver.value || board.value[y][x] !== 0) return
+
+  // 保存当前状态到历史记录
+  history.value.push({
+    board: board.value.map(row => [...row]),
+    player: currentPlayer.value,
+    x: lastMove.x,
+    y: lastMove.y,
+    step: stepCount.value
+  })
+
+  // 落子
+  board.value[y][x] = currentPlayer.value
+  lastMove.x = x
+  lastMove.y = y
+  stepCount.value++
+
+  // 检查是否获胜
+  if (checkWin(x, y)) {
+    gameOver.value = true
+    winner.value = currentPlayer.value
+  } else if (checkDraw()) {
+    // 检查是否平局
+    gameOver.value = true
+    winner.value = 0
+  } else {
+    // 切换玩家
+    currentPlayer.value = currentPlayer.value === 1 ? 2 : 1
+  }
+}
+
+// 悔棋
+const undoMove = () => {
+  if (canUndo.value) return
+
+  // 恢复上一步的状态
+  const prevState = history.value.pop()
+  board.value = prevState.board
+  currentPlayer.value = prevState.player
+  lastMove.x = prevState.x
+  lastMove.y = prevState.y
+  stepCount.value = prevState.step
+}
+
+// 初始化游戏
 initBoard()
 </script>
 
@@ -144,6 +210,7 @@ initBoard()
   flex-direction: column;
   align-items: center;
   gap: 20px;
+  padding: 10px;
 }
 
 .game-info {
@@ -156,11 +223,16 @@ initBoard()
   background: #f8f9fa;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .status {
   font-size: 1.1rem;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .current-player {
@@ -186,9 +258,28 @@ initBoard()
   font-size: 1.2rem;
 }
 
-.btn-reset {
+.draw {
+  color: #f39c12;
+  font-weight: bold;
+  font-size: 1.2rem;
+}
+
+.step-count {
+  font-size: 1rem;
+  color: #7f8c8d;
+  padding: 4px 12px;
+  background: #ecf0f1;
+  border-radius: 20px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-reset,
+.btn-undo {
   padding: 10px 20px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
   border: none;
   border-radius: 8px;
@@ -198,13 +289,29 @@ initBoard()
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.btn-reset:hover {
+.btn-reset {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.btn-undo {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.btn-reset:hover,
+.btn-undo:hover:not(.disabled) {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
 }
 
-.btn-reset:active {
+.btn-reset:active,
+.btn-undo:active:not(.disabled) {
   transform: translateY(0);
+}
+
+.btn-undo.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #bdc3c7;
 }
 
 .board-wrapper {
@@ -212,26 +319,32 @@ initBoard()
   background: #d4a574;
   border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  overflow: auto;
+  max-width: 100%;
 }
 
 .board {
   display: grid;
-  grid-template-columns: repeat(15, 32px);
-  grid-template-rows: repeat(15, 32px);
+  grid-template-columns: repeat(15, 1fr);
   gap: 0;
   background: #d4a574;
   position: relative;
+  min-width: 300px;
+  width: fit-content;
 }
 
 .board::before {
   content: '';
   position: absolute;
-  top: 16px;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
+  top: 50%;
+  left: 50%;
+  right: 50%;
+  bottom: 50%;
   border: 2px solid #8b6914;
   pointer-events: none;
+  transform: translate(-50%, -50%);
+  width: calc(100% - 1fr);
+  height: calc(100% - 1fr);
 }
 
 .row {
@@ -239,8 +352,10 @@ initBoard()
 }
 
 .cell {
-  width: 32px;
-  height: 32px;
+  width: clamp(20px, 5vw, 32px);
+  height: clamp(20px, 5vw, 32px);
+  min-width: 20px;
+  min-height: 20px;
   position: relative;
   cursor: pointer;
   display: flex;
@@ -275,8 +390,12 @@ initBoard()
 }
 
 .piece {
-  width: 28px;
-  height: 28px;
+  width: 85%;
+  height: 85%;
+  max-width: 28px;
+  max-height: 28px;
+  min-width: 16px;
+  min-height: 16px;
   border-radius: 50%;
   position: absolute;
   z-index: 1;
@@ -294,8 +413,10 @@ initBoard()
 
 .last-move {
   position: absolute;
-  width: 8px;
-  height: 8px;
+  width: 25%;
+  height: 25%;
+  min-width: 5px;
+  min-height: 5px;
   border-radius: 50%;
   z-index: 2;
 }
@@ -306,8 +427,8 @@ initBoard()
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  width: 8px;
-  height: 8px;
+  width: 100%;
+  height: 100%;
   background: #e74c3c;
   border-radius: 50%;
 }
@@ -362,5 +483,30 @@ initBoard()
 .game-over-content p {
   margin: 0;
   color: #7f8c8d;
+}
+
+/* 移动端适配 */
+@media (max-width: 600px) {
+  .game-info {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .status {
+    justify-content: center;
+  }
+
+  .buttons {
+    justify-content: center;
+  }
+
+  .game-over-content {
+    padding: 30px 40px;
+    margin: 20px;
+  }
+
+  .game-over-content h2 {
+    font-size: 1.5rem;
+  }
 }
 </style>
